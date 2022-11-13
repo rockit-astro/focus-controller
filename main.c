@@ -37,6 +37,7 @@
 #define CH2_DIR_HIGH  PORTD |= _BV(PD7)
 #define CH2_DIR_INIT  DDRD |= _BV(DDD7), CH2_DIR_LOW
 
+volatile bool enabled;
 volatile bool step_high;
 volatile bool led_active;
 char output[128];
@@ -141,7 +142,6 @@ static void loop(void)
         else
         {
             command_buffer[command_length] = (uint8_t)value;
-            usb_write(value);
             if (command_length < sizeof(command_buffer))
                 command_length++;
         }
@@ -161,7 +161,6 @@ int main(void)
     CH2_DIR_INIT;
     
     CH2_DIR_HIGH;
-    ENABLE_LOW;
 
     usb_initialize();
 
@@ -172,6 +171,18 @@ int main(void)
 
 ISR(TIMER1_COMPA_vect)
 {
+    if (!enabled && (ch1_current_steps != ch1_target_steps || ch2_current_steps != ch2_target_steps))
+    {
+        enabled = true;
+        ENABLE_LOW;
+        return;
+    }
+    else if (enabled && ch1_current_steps == ch1_target_steps && ch2_current_steps == ch2_target_steps)
+    {
+        enabled = false;
+        ENABLE_HIGH;
+    }
+
     if (ch1_current_steps < ch1_target_steps)
     {
         CH1_DIR_HIGH;
