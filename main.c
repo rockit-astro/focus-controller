@@ -50,6 +50,19 @@ int32_t ch1_current_steps = 0;
 int32_t ch2_target_steps = 0;
 int32_t ch2_current_steps = 0;
 
+static void update_eeprom(uint8_t channel, int32_t target)
+{
+    // Save the current absolute position so we can recover
+    // the absolute position after a power cycle.
+    // TODO: Implement a wear levelling strategy
+    eeprom_update_dword((uint32_t*)(channel == 1 ? 0 : 4), target);
+}
+
+static int32_t read_eeprom(uint8_t channel)
+{
+    return eeprom_read_dword((uint32_t*)(channel == 1 ? 0 : 4));
+}
+
 static void print_string(char *message)
 {
     usb_write_data(message, strlen(message));
@@ -81,11 +94,16 @@ static void loop(void)
                 if (command_length == 2 && cb[1] == 'S')
                 {
                     cli();
-                    // TODO: EEPROM
                     if (cb[0] == '1')
+                    {
                         ch1_target_steps = ch1_current_steps;
+                        update_eeprom(1, ch1_target_steps);
+                    }
                     else
+                    {
                         ch2_target_steps = ch2_current_steps;
+                        update_eeprom(2, ch2_target_steps);
+                    }
                     sei();
                     print_string("$\r\n");
                 }
@@ -93,11 +111,16 @@ static void loop(void)
                 else if (command_length == 2 && cb[1] == 'Z')
                 {
                     cli();
-                    // TODO: EEPROM
                     if (cb[0] == '1')
+                    {
                         ch1_target_steps = ch1_current_steps = 0;
+                        update_eeprom(1, ch1_target_steps);
+                    }
                     else
+                    {
                         ch2_target_steps = ch2_current_steps = 0;
+                        update_eeprom(2, ch2_target_steps);
+                    }
                     sei();
                     print_string("$\r\n");
                 }
@@ -122,11 +145,16 @@ static void loop(void)
                         cli();
                         // The raw motor resolution is too fine to be useful
                         // Work internally at 64x resolution, which allows 7 digits of external resolution.
-                        // TODO: EEPROM
                         if (cb[0] == '1')
+                        {
                             ch1_target_steps = target << 6;
+                            update_eeprom(1, ch1_target_steps);
+                        }
                         else
+                        {
                             ch2_target_steps = target << 6;
+                            update_eeprom(2, ch2_target_steps);
+                        }
                         sei();
                         print_string("$\r\n");
                     }
@@ -153,6 +181,9 @@ int main(void)
     OCR1A = 1;
     TCCR1B = _BV(CS12) | _BV(CS10) | _BV(WGM12);
     TIMSK1 |= _BV(OCIE1A);
+
+    ch1_target_steps = ch1_current_steps = read_eeprom(1);
+    ch2_target_steps = ch2_current_steps = read_eeprom(2);
 
     ENABLE_INIT;
     CH1_STEP_INIT;
