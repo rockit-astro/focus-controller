@@ -37,6 +37,8 @@
 #define CH2_DIR_HIGH  PORTD |= _BV(PD7)
 #define CH2_DIR_INIT  DDRD |= _BV(DDD7), CH2_DIR_LOW
 
+#define DOWNSAMPLE_BITS 4
+
 volatile bool enabled;
 volatile bool step_high;
 volatile bool led_active;
@@ -82,10 +84,10 @@ static void loop(void)
             if (command_length == 1 && cb[0] == '?')
             {
                 snprintf(output, 128, "T1=%+07ld,C1=%+07ld,T2=%+07ld,C2=%+07ld\r\n",
-                    ch1_target_steps >> 6,
-                    ch1_current_steps >> 6,
-                    ch2_target_steps >> 6,
-                    ch2_current_steps >> 6);
+                    ch1_target_steps >> DOWNSAMPLE_BITS,
+                    ch1_current_steps >> DOWNSAMPLE_BITS,
+                    ch2_target_steps >> DOWNSAMPLE_BITS,
+                    ch2_current_steps >> DOWNSAMPLE_BITS);
                 print_string(output);
             }
             else if (cb[0] == '1' || cb[0] == '2')
@@ -147,12 +149,12 @@ static void loop(void)
                         // Work internally at 64x resolution, which allows 7 digits of external resolution.
                         if (cb[0] == '1')
                         {
-                            ch1_target_steps = target << 6;
+                            ch1_target_steps = target << DOWNSAMPLE_BITS;
                             update_eeprom(1, ch1_target_steps);
                         }
                         else
                         {
-                            ch2_target_steps = target << 6;
+                            ch2_target_steps = target << DOWNSAMPLE_BITS;
                             update_eeprom(2, ch2_target_steps);
                         }
                         sei();
