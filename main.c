@@ -180,7 +180,7 @@ static void loop(void)
 
 int main(void)
 {
-    OCR1A = 1;
+    OCR1A = 4;
     TCCR1B = _BV(CS12) | _BV(CS10) | _BV(WGM12);
     TIMSK1 |= _BV(OCIE1A);
 
