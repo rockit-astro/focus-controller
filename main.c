@@ -32,6 +32,13 @@ typedef struct
 } channel;
 
 channel channels[] = {
+#if MODEL == 1
+    {
+        .enable_port = 'B', .enable_pin = 1,
+        .step_port = 'B', .step_pin = 0,
+        .dir_port = 'B', .dir_pin = 2
+    }
+#elif MODEL == 0
     {
         .enable_port = 'B', .enable_pin = 4,
         .step_port = 'D', .step_pin = 1,
@@ -42,12 +49,15 @@ channel channels[] = {
         .step_port = 'D', .step_pin = 0,
         .dir_port = 'D', .dir_pin = 7
     }
+#endif
 };
 
 // GRBL board shares the same enable pin for multiple motors
 // Defining GLOBAL_ENABLE_PIN changes the enable behaviour
 // to work over the set of all channels
+#if MODEL == 0
 #define GLOBAL_ENABLE_PIN 1
+#endif
 
 #define CHANNEL_COUNT (sizeof(channels)/sizeof(*(channels)))
 

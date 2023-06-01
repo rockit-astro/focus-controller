@@ -3,9 +3,19 @@
 
 # Run "make help" for target help.
 
+# Type of controller (for determining pinouts etc)
+# Can be one of:
+# 0: CLASP
+# 1: RASA8
+MODEL = 1
+
 MCU                = atmega32u4
 ARCH               = AVR8
+ifeq ($(MODEL), CLASP)
 BOARD              = LEONARDO
+else
+BOARD              = MICRO
+endif
 F_CPU              = 16000000
 F_USB              = $(F_CPU)
 AVRDUDE_PROGRAMMER = avr109
@@ -15,7 +25,7 @@ OPTIMIZATION = s
 TARGET       = main
 SRC          = main.c usb.c usb_descriptors.c $(LUFA_SRC_USB) $(LUFA_SRC_USBCLASS)
 LUFA_PATH    = LUFA
-CC_FLAGS     = -DUSE_LUFA_CONFIG_HEADER
+CC_FLAGS     = -DUSE_LUFA_CONFIG_HEADER -DMODEL=$(MODEL)
 LD_FLAGS     = -Wl,-u,vfprintf -lprintf_flt -lm
 
 # Default target
