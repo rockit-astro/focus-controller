@@ -17,52 +17,67 @@
 #define F_CPU 16000000UL
 #include <util/delay.h>
 
-#define ENABLE_LOW   PORTB &= ~_BV(PB4)
-#define ENABLE_HIGH  PORTB |= _BV(PB4)
-#define ENABLE_INIT  DDRB |= _BV(DDB4), ENABLE_HIGH
+#define length(array) (sizeof(array)/sizeof(*(array)))
 
-#define CH1_STEP_LOW   PORTD &= ~_BV(PD1)
-#define CH1_STEP_HIGH  PORTD |= _BV(PD1)
-#define CH1_STEP_INIT  DDRD |= _BV(DDD1), CH1_STEP_LOW
+typedef struct
+{
+    uint8_t enable_port;
+    uint8_t enable_pin;
+    
+    uint8_t step_port;
+    uint8_t step_pin;
+    
+    uint8_t dir_port;
+    uint8_t dir_pin;
+} channel;
 
-#define CH1_DIR_LOW   PORTC &= ~_BV(PC6)
-#define CH1_DIR_HIGH  PORTC |= _BV(PC6)
-#define CH1_DIR_INIT  DDRC |= _BV(DDC6), CH1_DIR_LOW
+channel channels[] = {
+    {
+        .enable_port = 'B', .enable_pin = 4,
+        .step_port = 'D', .step_pin = 1,
+        .dir_port = 'C', .dir_pin = 6
+    },
+    {
+        .enable_port = 'B', .enable_pin = 4,
+        .step_port = 'D', .step_pin = 0,
+        .dir_port = 'D', .dir_pin = 7
+    }
+};
 
-#define CH2_STEP_LOW   PORTD &= ~_BV(PD0)
-#define CH2_STEP_HIGH  PORTD |= _BV(PD0)
-#define CH2_STEP_INIT  DDRD |= _BV(DDD0), CH2_STEP_LOW
+// GRBL board shares the same enable pin for multiple motors
+// Defining GLOBAL_ENABLE_PIN changes the enable behaviour
+// to work over the set of all channels
+#define GLOBAL_ENABLE_PIN 1
 
-#define CH2_DIR_LOW   PORTD &= ~_BV(PD7)
-#define CH2_DIR_HIGH  PORTD |= _BV(PD7)
-#define CH2_DIR_INIT  DDRD |= _BV(DDD7), CH2_DIR_LOW
+#define CHANNEL_COUNT (sizeof(channels)/sizeof(*(channels)))
+
+// The raw motor resolution is too fine to be useful
+// Work internally at 64x resolution, which allows 7 digits of external resolution.
 
 #define DOWNSAMPLE_BITS 4
 
-volatile bool enabled;
-volatile bool step_high;
 volatile bool led_active;
-char output[128];
+char output[256];
 
 uint8_t command_length = 0;
 char command_buffer[16];
 
-int32_t ch1_target_steps = 0;
-int32_t ch1_current_steps = 0;
-int32_t ch2_target_steps = 0;
-int32_t ch2_current_steps = 0;
+int32_t target_steps[CHANNEL_COUNT] = {};
+int32_t current_steps[CHANNEL_COUNT] = {};
+bool enabled[CHANNEL_COUNT] = {};
+bool step_high[CHANNEL_COUNT] = {};
 
-static void update_eeprom(uint8_t channel, int32_t target)
+static void update_eeprom(uint8_t i, int32_t target)
 {
     // Save the current absolute position so we can recover
     // the absolute position after a power cycle.
     // TODO: Implement a wear levelling strategy
-    eeprom_update_dword((uint32_t*)(channel == 1 ? 0 : 4), target);
+    eeprom_update_dword((uint32_t*)(4 * i), target);
 }
 
-static int32_t read_eeprom(uint8_t channel)
+static int32_t read_eeprom(uint8_t i)
 {
-    return eeprom_read_dword((uint32_t*)(channel == 1 ? 0 : 4));
+    return eeprom_read_dword((uint32_t*)(4 * i));
 }
 
 static void print_string(char *message)
@@ -83,50 +98,48 @@ static void loop(void)
             char *cb = command_buffer;
             if (command_length == 1 && cb[0] == '?')
             {
-                snprintf(output, 128, "T1=%+07ld,C1=%+07ld,T2=%+07ld,C2=%+07ld\r\n",
-                    ch1_target_steps >> DOWNSAMPLE_BITS,
-                    ch1_current_steps >> DOWNSAMPLE_BITS,
-                    ch2_target_steps >> DOWNSAMPLE_BITS,
-                    ch2_current_steps >> DOWNSAMPLE_BITS);
+                for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+                {
+                    
+                    sprintf(output + i * 22, "T%01d=%+07ld,C%01d=%+07ld,",
+                        i + 1,
+                        target_steps[i] >> DOWNSAMPLE_BITS,
+                        i + 1,
+                        current_steps[i] >> DOWNSAMPLE_BITS);
+                }
+                
+                sprintf(output + CHANNEL_COUNT * 22 - 1, "\r\n");
+                
                 print_string(output);
             }
-            else if (cb[0] == '1' || cb[0] == '2')
+            else if (cb[0] > '0' && cb[0] <= '0' + CHANNEL_COUNT)
             {
-                // Stop at current position: [12]S\r\n
+                // 0-indexed channel number
+                uint8_t i = cb[0] - '1';
+
+                // Stop at current position: [1..9]S\r\n
                 if (command_length == 2 && cb[1] == 'S')
                 {
                     cli();
-                    if (cb[0] == '1')
-                    {
-                        ch1_target_steps = ch1_current_steps;
-                        update_eeprom(1, ch1_target_steps);
-                    }
-                    else
-                    {
-                        ch2_target_steps = ch2_current_steps;
-                        update_eeprom(2, ch2_target_steps);
-                    }
+
+                    target_steps[i] = current_steps[i];
+                    update_eeprom(i, target_steps[i]);
+
                     sei();
                     print_string("$\r\n");
                 }
-                // Zero at current position: [12]Z\r\n
+                // Zero at current position: [1..9]Z\r\n
                 else if (command_length == 2 && cb[1] == 'Z')
                 {
                     cli();
-                    if (cb[0] == '1')
-                    {
-                        ch1_target_steps = ch1_current_steps = 0;
-                        update_eeprom(1, ch1_target_steps);
-                    }
-                    else
-                    {
-                        ch2_target_steps = ch2_current_steps = 0;
-                        update_eeprom(2, ch2_target_steps);
-                    }
+
+                    target_steps[i] = current_steps[i] = 0;
+                    update_eeprom(i, 0);
+
                     sei();
                     print_string("$\r\n");
                 }
-                // Move to position: [12][+-]1234567\r\n
+                // Move to position: [1..9][+-]1234567\r\n
                 else if (command_length > 2 && (cb[1] == '+' || cb[1] == '-'))
                 {
                     bool is_number = command_length <= 9;
@@ -145,18 +158,10 @@ static void loop(void)
                         command_buffer[command_length++] = '\0';
                         int32_t target = atol(&cb[1]);
                         cli();
-                        // The raw motor resolution is too fine to be useful
-                        // Work internally at 64x resolution, which allows 7 digits of external resolution.
-                        if (cb[0] == '1')
-                        {
-                            ch1_target_steps = target << DOWNSAMPLE_BITS;
-                            update_eeprom(1, ch1_target_steps);
-                        }
-                        else
-                        {
-                            ch2_target_steps = target << DOWNSAMPLE_BITS;
-                            update_eeprom(2, ch2_target_steps);
-                        }
+
+                        target_steps[i] = target << DOWNSAMPLE_BITS;
+                        update_eeprom(i, target_steps[i]);
+
                         sei();
                         print_string("$\r\n");
                     }
@@ -178,22 +183,47 @@ static void loop(void)
     }
 }
 
+volatile uint8_t *resolve_port(uint8_t port)
+{
+    if (port == 'B')
+        return &PORTB;
+    if (port == 'C')
+        return &PORTC;
+    if (port == 'D')
+        return &PORTD;
+
+    return &PORTB;
+}
+
+volatile uint8_t *resolve_ddr(uint8_t port)
+{
+    if (port == 'B')
+        return &DDRB;
+    if (port == 'C')
+        return &DDRC;
+    if (port == 'D')
+        return &DDRD;
+
+    return &DDRB;
+}
+
 int main(void)
 {
     OCR1A = 4;
     TCCR1B = _BV(CS12) | _BV(CS10) | _BV(WGM12);
     TIMSK1 |= _BV(OCIE1A);
 
-    ch1_target_steps = ch1_current_steps = read_eeprom(1);
-    ch2_target_steps = ch2_current_steps = read_eeprom(2);
-
-    ENABLE_INIT;
-    CH1_STEP_INIT;
-    CH1_DIR_INIT;
-    CH2_STEP_INIT;
-    CH2_DIR_INIT;
-    
-    CH2_DIR_HIGH;
+    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+    {
+        channel *c = &channels[i];
+        *resolve_ddr(c->enable_port) |= _BV(c->enable_pin);
+        *resolve_port(c->enable_port) |= _BV(c->enable_pin);
+        *resolve_ddr(c->step_port) |= _BV(c->step_pin);
+        *resolve_port(c->step_port) &= ~_BV(c->step_pin);
+        *resolve_ddr(c->dir_port) |= _BV(c->dir_pin);
+        *resolve_port(c->dir_port) &= ~_BV(c->dir_pin);
+        target_steps[i] = read_eeprom(i);
+    }
 
     usb_initialize();
 
@@ -203,64 +233,76 @@ int main(void)
 }
 
 ISR(TIMER1_COMPA_vect)
-{
-    if (!enabled && (ch1_current_steps != ch1_target_steps || ch2_current_steps != ch2_target_steps))
+{    
+#ifdef GLOBAL_ENABLE_PIN
+    bool any_to_move;
+    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+        if (current_steps[i] != target_steps[i])
+            any_to_move = true;
+
+    if (any_to_move && !enabled[0])
     {
-        enabled = true;
-        ENABLE_LOW;
+        *resolve_port(c->enable_port) &= ~_BV(c->enable_pin);
+        enabled[0] = true;
+
+        // Skip a step when enabling a motor to avoid losing a count while it powers up
         return;
     }
-    else if (enabled && ch1_current_steps == ch1_target_steps && ch2_current_steps == ch2_target_steps)
+    
+    if (!any_to_move && enabled[0])
     {
-        enabled = false;
-        ENABLE_HIGH;
+        *resolve_port(c->enable_port) |= _BV(c->enable_pin);
+        enabled[0] = false;
     }
+#endif
 
-    if (ch1_current_steps < ch1_target_steps)
+    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
     {
-        CH1_DIR_HIGH;
-        if (!step_high)
+        channel *c = &channels[i];
+#ifndef GLOBAL_ENABLE_PIN
+        if (!enabled[i] && current_steps[i] != target_steps[i])
         {
-            CH1_STEP_HIGH;
-            ch1_current_steps++;
-        }
-        else
-            CH1_STEP_LOW;
-    }
-    else if (ch1_current_steps > ch1_target_steps)
-    {
-        CH1_DIR_LOW;
-        if (!step_high)
-        {
-            CH1_STEP_HIGH;
-            ch1_current_steps--;
-        }
-        else
-            CH1_STEP_LOW;
-    }
+            enabled[i] = true;
+            step_high[i] = false;
+            *resolve_port(c->step_port) |= _BV(c->step_pin);
+            *resolve_port(c->enable_port) &= ~_BV(c->enable_pin);
 
-    if (ch2_current_steps < ch2_target_steps)
-    {
-        CH2_DIR_HIGH;
-        if (!step_high)
-        {
-            CH2_STEP_HIGH;
-            ch2_current_steps++;
+            // Skip a step when enabling a motor to avoid losing a count while it powers up
+            continue;
         }
-        else
-            CH2_STEP_LOW;
-    }
-    else if (ch2_current_steps > ch2_target_steps)
-    {
-        CH2_DIR_LOW;
-        if (!step_high)
+#endif
+        else if (current_steps[i] < target_steps[i])
         {
-            CH2_STEP_HIGH;
-            ch2_current_steps--;
-        }
-        else
-            CH2_STEP_LOW;
-    }
+            *resolve_port(c->dir_port) |= _BV(c->dir_pin);
+            if (!step_high[i])
+            {
+                *resolve_port(c->step_port) |= _BV(c->step_pin);
+                current_steps[i]++;
+            }
+            else
+                *resolve_port(c->step_port) &= ~_BV(c->step_pin);
 
-    step_high ^= true;
+            step_high[i] ^= true;
+        }
+        else if (current_steps[i] > target_steps[i])
+        {
+            *resolve_port(c->dir_port) &= ~_BV(c->dir_pin);
+            if (!step_high[i])
+            {
+                *resolve_port(c->step_port) |= _BV(c->step_pin);
+                current_steps[i]--;
+            }
+            else
+                *resolve_port(c->step_port) &= ~_BV(c->step_pin);
+
+            step_high[i] ^= true;
+        }
+#ifndef GLOBAL_ENABLE_PIN
+        else if (enabled[i])
+        {
+            enabled[i] = false;
+            *resolve_port(c->enable_port) |= _BV(c->enable_pin);
+        }
+#endif
+    }
 }
