@@ -23,7 +23,7 @@ AVRDUDE_PORT       = /dev/tty.usbmodem*
 
 OPTIMIZATION = s
 TARGET       = main
-SRC          = main.c usb.c usb_descriptors.c $(LUFA_SRC_USB) $(LUFA_SRC_USBCLASS)
+SRC          = main.c gpio.c usb.c usb_descriptors.c $(LUFA_SRC_USB) $(LUFA_SRC_USBCLASS)
 LUFA_PATH    = LUFA
 CC_FLAGS     = -DUSE_LUFA_CONFIG_HEADER -DMODEL=$(MODEL)
 LD_FLAGS     = -Wl,-u,vfprintf -lprintf_flt -lm

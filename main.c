@@ -1,5 +1,5 @@
 //**********************************************************************************
-//  Copyright 2016, 2017, 2022 Paul Chote, All Rights Reserved
+//  Copyright 2016, 2017, 2022, 2023 Paul Chote, All Rights Reserved
 //**********************************************************************************
 
 #include <avr/eeprom.h>
@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "gpio.h"
 #include "usb.h"
 
 #define F_CPU 16000000UL
@@ -21,36 +22,35 @@
 
 typedef struct
 {
-    uint8_t enable_port;
-    uint8_t enable_pin;
-    
-    uint8_t step_port;
-    uint8_t step_pin;
-    
-    uint8_t dir_port;
-    uint8_t dir_pin;
+    gpin_t enable;
+    gpin_t step;
+    gpin_t dir;
 } channel;
 
 channel channels[] = {
 #if MODEL == 1
     {
-        .enable_port = 'B', .enable_pin = 1,
-        .step_port = 'B', .step_pin = 0,
-        .dir_port = 'B', .dir_pin = 2
+        .enable = { &PORTB, &PINB, &DDRB, PB1 },
+        .step = { &PORTB, &PINB, &DDRB, PB0 },
+        .dir = { &PORTB, &PINB, &DDRB, PB2 }
     }
 #elif MODEL == 0
     {
-        .enable_port = 'B', .enable_pin = 4,
-        .step_port = 'D', .step_pin = 1,
-        .dir_port = 'C', .dir_pin = 6
+        .enable = { &PORTB, &PINB, &DDRB, PB4 },
+        .step = { &PORTD, &PIND, &DDRD, PD1 },
+        .dir = { &PORTC, &PINC, &DDRC, PC6 }
     },
     {
-        .enable_port = 'B', .enable_pin = 4,
-        .step_port = 'D', .step_pin = 0,
-        .dir_port = 'D', .dir_pin = 7
+        .enable = { &PORTB, &PINB, &DDRB, PB4 },
+        .step = { &PORTD, &PIND, &DDRD, PD0 },
+        .dir = { &PORTD, &PIND, &DDRD, PD7 }
     }
 #endif
 };
+
+gpin_t usb_conn_led = { &PORTC, &PINC, &DDRC, PD7 };
+gpin_t usb_rx_led = { &PORTB, &PINB, &DDRB, PB0 };
+gpin_t usb_tx_led = { &PORTD, &PIND, &DDRD, PD5 };
 
 // GRBL board shares the same enable pin for multiple motors
 // Defining GLOBAL_ENABLE_PIN changes the enable behaviour
@@ -193,30 +193,6 @@ static void loop(void)
     }
 }
 
-volatile uint8_t *resolve_port(uint8_t port)
-{
-    if (port == 'B')
-        return &PORTB;
-    if (port == 'C')
-        return &PORTC;
-    if (port == 'D')
-        return &PORTD;
-
-    return &PORTB;
-}
-
-volatile uint8_t *resolve_ddr(uint8_t port)
-{
-    if (port == 'B')
-        return &DDRB;
-    if (port == 'C')
-        return &DDRC;
-    if (port == 'D')
-        return &DDRD;
-
-    return &DDRB;
-}
-
 int main(void)
 {
     OCR1A = 4;
@@ -226,16 +202,19 @@ int main(void)
     for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
     {
         channel *c = &channels[i];
-        *resolve_ddr(c->enable_port) |= _BV(c->enable_pin);
-        *resolve_port(c->enable_port) |= _BV(c->enable_pin);
-        *resolve_ddr(c->step_port) |= _BV(c->step_pin);
-        *resolve_port(c->step_port) &= ~_BV(c->step_pin);
-        *resolve_ddr(c->dir_port) |= _BV(c->dir_pin);
-        *resolve_port(c->dir_port) &= ~_BV(c->dir_pin);
+        gpio_configure_output(&c->enable);
+        gpio_output_set_high(&c->enable);
+
+        gpio_configure_output(&c->step);
+        gpio_output_set_low(&c->step);
+
+        gpio_configure_output(&c->dir);
+        gpio_output_set_low(&c->dir);
+
         target_steps[i] = read_eeprom(i);
     }
 
-    usb_initialize();
+    usb_initialize(&usb_conn_led, &usb_rx_led, &usb_tx_led);
 
     sei();
     for (;;)
@@ -243,7 +222,7 @@ int main(void)
 }
 
 ISR(TIMER1_COMPA_vect)
-{    
+{
 #ifdef GLOBAL_ENABLE_PIN
     bool any_to_move;
     for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
@@ -252,7 +231,7 @@ ISR(TIMER1_COMPA_vect)
 
     if (any_to_move && !enabled[0])
     {
-        *resolve_port(c->enable_port) &= ~_BV(c->enable_pin);
+        gpio_output_set_low(&c->enable);
         enabled[0] = true;
 
         // Skip a step when enabling a motor to avoid losing a count while it powers up
@@ -261,7 +240,7 @@ ISR(TIMER1_COMPA_vect)
     
     if (!any_to_move && enabled[0])
     {
-        *resolve_port(c->enable_port) |= _BV(c->enable_pin);
+        gpio_output_set_high(&c->enable);
         enabled[0] = false;
     }
 #endif
@@ -273,37 +252,38 @@ ISR(TIMER1_COMPA_vect)
         if (!enabled[i] && current_steps[i] != target_steps[i])
         {
             enabled[i] = true;
-            step_high[i] = false;
-            *resolve_port(c->step_port) |= _BV(c->step_pin);
-            *resolve_port(c->enable_port) &= ~_BV(c->enable_pin);
+            step_high[i] = true;
+            gpio_output_set_high(&c->step);
+            gpio_output_set_low(&c->enable);
 
             // Skip a step when enabling a motor to avoid losing a count while it powers up
             continue;
         }
+        else 
 #endif
-        else if (current_steps[i] < target_steps[i])
+        if (current_steps[i] < target_steps[i])
         {
-            *resolve_port(c->dir_port) |= _BV(c->dir_pin);
+            gpio_output_set_high(&c->dir);
             if (!step_high[i])
             {
-                *resolve_port(c->step_port) |= _BV(c->step_pin);
+                gpio_output_set_high(&c->step);
                 current_steps[i]++;
             }
             else
-                *resolve_port(c->step_port) &= ~_BV(c->step_pin);
+                gpio_output_set_low(&c->step);
 
             step_high[i] ^= true;
         }
         else if (current_steps[i] > target_steps[i])
         {
-            *resolve_port(c->dir_port) &= ~_BV(c->dir_pin);
+            gpio_output_set_low(&c->dir);
             if (!step_high[i])
             {
-                *resolve_port(c->step_port) |= _BV(c->step_pin);
+                gpio_output_set_high(&c->step);
                 current_steps[i]--;
             }
             else
-                *resolve_port(c->step_port) &= ~_BV(c->step_pin);
+                gpio_output_set_low(&c->step);
 
             step_high[i] ^= true;
         }
@@ -311,7 +291,7 @@ ISR(TIMER1_COMPA_vect)
         else if (enabled[i])
         {
             enabled[i] = false;
-            *resolve_port(c->enable_port) |= _BV(c->enable_pin);
+            gpio_output_set_high(&c->enable);
         }
 #endif
     }

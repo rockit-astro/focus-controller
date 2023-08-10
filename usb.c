@@ -1,5 +1,5 @@
 //**********************************************************************************
-//  Copyright 2016, 2017, 2022 Paul Chote, All Rights Reserved
+//  Copyright 2016, 2017, 2022, 2023 Paul Chote, All Rights Reserved
 //**********************************************************************************
 
 #include <avr/io.h>
@@ -9,6 +9,7 @@
 #include <LUFA/Drivers/USB/USB.h>
 #include <LUFA/Common/Common.h>
 #include "usb_descriptors.h"
+#include "gpio.h"
 
 USB_ClassInfo_CDC_Device_t interface =
 {
@@ -36,22 +37,30 @@ USB_ClassInfo_CDC_Device_t interface =
     },
 };
 
-#define TX_LED_ENABLED            PORTD &= ~_BV(5)
-#define TX_LED_DISABLED           PORTD |= _BV(5)
-#define RX_LED_ENABLED            PORTB &= ~_BV(0)
-#define RX_LED_DISABLED           PORTB |= _BV(0)
-#define CONNECTION_LED_ENABLED    PORTC |= _BV(7)
-#define CONNECTION_LED_DISABLED   PORTC &= ~_BV(7)
-#define TX_RX_CONNECTION_LED_INIT DDRB |= _BV(0), DDRC |= _BV(7), DDRD |= _BV(5), TX_LED_DISABLED, RX_LED_DISABLED, CONNECTION_LED_DISABLED
-
 // Counters (in milliseconds) for blinking the TX/RX LEDs
 #define TX_RX_LED_PULSE_MS 100
+
 volatile uint8_t tx_led_pulse;
 volatile uint8_t rx_led_pulse;
+static gpin_t *conn_led;
+static gpin_t *rx_led;
+static gpin_t *tx_led;
 
-void usb_initialize(void)
+void usb_initialize(gpin_t *usb_conn_led, gpin_t *usb_rx_led, gpin_t *usb_tx_led)
 {
-    TX_RX_CONNECTION_LED_INIT;
+    conn_led = usb_conn_led;
+    rx_led = usb_rx_led;
+    tx_led = usb_tx_led;
+    
+    gpio_configure_output(conn_led);
+    gpio_output_set_low(conn_led);
+
+    gpio_configure_output(rx_led);
+    gpio_output_set_low(rx_led);
+
+    gpio_configure_output(tx_led);
+    gpio_output_set_low(tx_led);
+
     USB_Init();
 }
 
@@ -69,7 +78,7 @@ int16_t usb_read(void)
     // Flash the RX LED
     if (ret >= 0)
     {
-        RX_LED_ENABLED;
+        gpio_output_set_high(rx_led);
         rx_led_pulse = TX_RX_LED_PULSE_MS;
         USB_Device_EnableSOFEvents();
     }
@@ -91,7 +100,7 @@ void usb_write(uint8_t b)
         return;
 
     // Flash the TX LED
-    TX_LED_ENABLED;
+    gpio_output_set_high(tx_led);
     tx_led_pulse = TX_RX_LED_PULSE_MS;
     USB_Device_EnableSOFEvents();
 }
@@ -108,10 +117,9 @@ void usb_write_data(void *buf, uint16_t len)
         return;
 
     // Flash the TX LED
-    TX_LED_ENABLED;
+    gpio_output_set_high(tx_led);
     tx_led_pulse = TX_RX_LED_PULSE_MS;
     USB_Device_EnableSOFEvents();
-    
 }
 
 void EVENT_USB_Device_ConfigurationChanged(void)
@@ -122,9 +130,9 @@ void EVENT_USB_Device_ConfigurationChanged(void)
 void EVENT_CDC_Device_ControLineStateChanged(USB_ClassInfo_CDC_Device_t* const CDCInterfaceInfo)
 {
     if (CDCInterfaceInfo->State.ControlLineStates.HostToDevice & CDC_CONTROL_LINE_OUT_DTR)
-        CONNECTION_LED_ENABLED;
+        gpio_output_set_high(conn_led);
     else
-        CONNECTION_LED_DISABLED;
+        gpio_output_set_low(conn_led);
 }
 
 void EVENT_USB_Device_Connect(void)
@@ -136,8 +144,8 @@ void EVENT_USB_Device_Disconnect(void)
 {
     // The SOF event will not fire while the device is disconnected
     // so make sure that the TX/RX LEDs are turned off now
-    TX_LED_DISABLED;
-    RX_LED_DISABLED;
+    gpio_output_set_low(tx_led);
+    gpio_output_set_low(rx_led);
 }
 
 void EVENT_USB_Device_ControlRequest(void)
@@ -150,9 +158,9 @@ void EVENT_USB_Device_StartOfFrame(void)
     // SOF event runs once per millisecond when enabled
     // Use this to count down and turn off the RX/TX LEDs.
     if (tx_led_pulse && !(--tx_led_pulse))
-        TX_LED_DISABLED;
+        gpio_output_set_low(tx_led);
     if (rx_led_pulse && !(--rx_led_pulse))
-        RX_LED_DISABLED;
+        gpio_output_set_low(rx_led);
 
     // Disable SOF event while both LEDs are disabled
     if (!tx_led_pulse && !rx_led_pulse)
