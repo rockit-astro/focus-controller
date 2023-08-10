@@ -211,7 +211,7 @@ int main(void)
         gpio_configure_output(&c->dir);
         gpio_output_set_low(&c->dir);
 
-        target_steps[i] = read_eeprom(i);
+        target_steps[i] = current_steps[i] = read_eeprom(i);
     }
 
     usb_initialize(&usb_conn_led, &usb_rx_led, &usb_tx_led);
