@@ -390,13 +390,6 @@
 		#include "Core/USBController.h"
 		#include "Core/USBInterrupt.h"
 
-		#if defined(USB_CAN_BE_HOST) || defined(__DOXYGEN__)
-			#include "Core/Host.h"
-			#include "Core/Pipe.h"
-			#include "Core/HostStandardReq.h"
-			#include "Core/PipeStream.h"
-		#endif
-
 		#if defined(USB_CAN_BE_DEVICE) || defined(__DOXYGEN__)
 			#include "Core/Device.h"
 			#include "Core/Endpoint.h"
@@ -404,19 +397,7 @@
 			#include "Core/EndpointStream.h"
 		#endif
 
-		#if defined(USB_CAN_BE_BOTH) || defined(__DOXYGEN__)
-			#include "Core/OTG.h"
-		#endif
-
-		#include "Class/AndroidAccessoryClass.h"
-		#include "Class/AudioClass.h"
-		#include "Class/CDCClass.h"
-		#include "Class/HIDClass.h"
-		#include "Class/MassStorageClass.h"
-		#include "Class/MIDIClass.h"
-		#include "Class/PrinterClass.h"
-		#include "Class/RNDISClass.h"
-		#include "Class/StillImageClass.h"
+#include "Class/CDCClass.h"
 
 #endif
 

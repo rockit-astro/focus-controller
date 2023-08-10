@@ -113,10 +113,6 @@
 	/* Architecture Includes: */
 		#if (ARCH == ARCH_AVR8)
 			#include "AVR8/Endpoint_AVR8.h"
-		#elif (ARCH == ARCH_UC3)
-			#include "UC3/Endpoint_UC3.h"
-		#elif (ARCH == ARCH_XMEGA)
-			#include "XMEGA/Endpoint_XMEGA.h"
 		#endif
 
 	/* Disable C linkage for C++ Compilers: */
