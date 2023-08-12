@@ -50,6 +50,7 @@ gpin_t usb_conn_led = { &PORTC, &PINC, &DDRC, PD7 };
 gpin_t usb_rx_led = { &PORTB, &PINB, &DDRB, PB0 };
 gpin_t usb_tx_led = { &PORTD, &PIND, &DDRD, PD5 };
 
+gpin_t fans = { &PORTB, &PINB, &DDRB, PB5 };
 
 // The raw motor resolution is too fine to be useful
 // Work internally at 64x resolution, which allows 7 digits of external resolution.
@@ -66,6 +67,8 @@ int32_t target_steps[CHANNEL_COUNT] = {};
 int32_t current_steps[CHANNEL_COUNT] = {};
 bool enabled[CHANNEL_COUNT] = {};
 bool step_high[CHANNEL_COUNT] = {};
+
+bool fans_enabled = false;
 
 static void update_eeprom(uint8_t i, int32_t target)
 {
@@ -95,6 +98,7 @@ static void loop(void)
 
         if (command_length > 0 && (value == '\r' || value == '\n'))
         {
+            // Report stepper motor status
             char *cb = command_buffer;
             if (command_length == 1 && cb[0] == '?')
             {
@@ -110,6 +114,24 @@ static void loop(void)
                 sprintf(output + CHANNEL_COUNT * 22 - 1, "\r\n");
                 
                 print_string(output);
+            }
+            else if (command_length == 1 && cb[0] == '#')
+            {
+                // Report fan status
+                sprintf(output, "%d\r\n", fans_enabled);
+                print_string(output);
+            }
+            else if (command_length == 2 && cb[0] == '#' && (cb[1] == '0' || cb[1] == '1'))
+            {
+                // Switch fans on or off
+                fans_enabled = cb[1] == '1';
+
+                if (fans_enabled)
+                    gpio_output_set_high(&fans);
+                else
+                    gpio_output_set_low(&fans);
+
+                print_string("$\r\n");
             }
             else if (cb[0] > '0' && cb[0] <= '0' + CHANNEL_COUNT)
             {
@@ -202,6 +224,9 @@ int main(void)
 
         target_steps[i] = current_steps[i] = read_eeprom(i);
     }
+
+    gpio_output_set_low(&fans);
+    gpio_configure_output(&fans);
 
     usb_initialize(&usb_conn_led, &usb_rx_led, &usb_tx_led);
 

@@ -10,7 +10,9 @@ TODO: The focuser maintains its own absolute scale across power cycles, so posit
 
 | Command             | Use                                  |
 |---------------------|--------------------------------------|
-| `?\n`               | Query current status                 |
+| `?\n`               | Query stepper status                 |
+| `#\n`               | Query fans status                    |
+| `#[01]\n`           | Disable or enable fans               |
 | `[12]S\n`           | Stop channel 1/2 at current position |
 | `[12]Z\n`           | Zero channel 1/2 at current position |
 | `[12][+-]1234567\n` | Set channel 1/2 target position      |
