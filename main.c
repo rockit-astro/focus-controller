@@ -28,38 +28,28 @@ typedef struct
 } channel;
 
 channel channels[] = {
-#if MODEL == 1
     {
-        .enable = { &PORTB, &PINB, &DDRB, PB1 },
-        .step = { &PORTB, &PINB, &DDRB, PB0 },
-        .dir = { &PORTB, &PINB, &DDRB, PB2 }
-    }
-#elif MODEL == 0
-    {
-        .enable = { &PORTB, &PINB, &DDRB, PB4 },
-        .step = { &PORTD, &PIND, &DDRD, PD1 },
-        .dir = { &PORTC, &PINC, &DDRC, PC6 }
+        .enable = { &PORTD, &PIND, &DDRD, PD1 },
+        .step = { &PORTB, &PINB, &DDRB, PB2 },
+        .dir = { &PORTB, &PINB, &DDRB, PB1 }
     },
+#if CHANNELS == 2
     {
-        .enable = { &PORTB, &PINB, &DDRB, PB4 },
-        .step = { &PORTD, &PIND, &DDRD, PD0 },
-        .dir = { &PORTD, &PIND, &DDRD, PD7 }
+        .enable = { &PORTB, &PINB, &DDRB, PB6 },
+        .step = { &PORTD, &PIND, &DDRD, PD4 },
+        .dir = { &PORTD, &PIND, &DDRD, PD0 }
     }
+#elif CHANNELS > 2
+    #error Only 1 or 2 channels are supported
 #endif
 };
+
+#define CHANNEL_COUNT (sizeof(channels)/sizeof(*(channels)))
 
 gpin_t usb_conn_led = { &PORTC, &PINC, &DDRC, PD7 };
 gpin_t usb_rx_led = { &PORTB, &PINB, &DDRB, PB0 };
 gpin_t usb_tx_led = { &PORTD, &PIND, &DDRD, PD5 };
 
-// GRBL board shares the same enable pin for multiple motors
-// Defining GLOBAL_ENABLE_PIN changes the enable behaviour
-// to work over the set of all channels
-#if MODEL == 0
-#define GLOBAL_ENABLE_PIN 1
-#endif
-
-#define CHANNEL_COUNT (sizeof(channels)/sizeof(*(channels)))
 
 // The raw motor resolution is too fine to be useful
 // Work internally at 64x resolution, which allows 7 digits of external resolution.
@@ -110,7 +100,6 @@ static void loop(void)
             {
                 for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
                 {
-                    
                     sprintf(output + i * 22, "T%01d=%+07ld,C%01d=%+07ld,",
                         i + 1,
                         target_steps[i] >> DOWNSAMPLE_BITS,
@@ -202,14 +191,14 @@ int main(void)
     for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
     {
         channel *c = &channels[i];
-        gpio_configure_output(&c->enable);
         gpio_output_set_high(&c->enable);
+        gpio_configure_output(&c->enable);
 
-        gpio_configure_output(&c->step);
         gpio_output_set_low(&c->step);
+        gpio_configure_output(&c->step);
 
-        gpio_configure_output(&c->dir);
         gpio_output_set_low(&c->dir);
+        gpio_configure_output(&c->dir);
 
         target_steps[i] = current_steps[i] = read_eeprom(i);
     }
@@ -223,32 +212,9 @@ int main(void)
 
 ISR(TIMER1_COMPA_vect)
 {
-#ifdef GLOBAL_ENABLE_PIN
-    bool any_to_move;
-    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-        if (current_steps[i] != target_steps[i])
-            any_to_move = true;
-
-    if (any_to_move && !enabled[0])
-    {
-        gpio_output_set_low(&c->enable);
-        enabled[0] = true;
-
-        // Skip a step when enabling a motor to avoid losing a count while it powers up
-        return;
-    }
-    
-    if (!any_to_move && enabled[0])
-    {
-        gpio_output_set_high(&c->enable);
-        enabled[0] = false;
-    }
-#endif
-
     for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
     {
         channel *c = &channels[i];
-#ifndef GLOBAL_ENABLE_PIN
         if (!enabled[i] && current_steps[i] != target_steps[i])
         {
             enabled[i] = true;
@@ -259,9 +225,7 @@ ISR(TIMER1_COMPA_vect)
             // Skip a step when enabling a motor to avoid losing a count while it powers up
             continue;
         }
-        else 
-#endif
-        if (current_steps[i] < target_steps[i])
+        else if (current_steps[i] < target_steps[i])
         {
             gpio_output_set_high(&c->dir);
             if (!step_high[i])
@@ -287,12 +251,10 @@ ISR(TIMER1_COMPA_vect)
 
             step_high[i] ^= true;
         }
-#ifndef GLOBAL_ENABLE_PIN
         else if (enabled[i])
         {
             enabled[i] = false;
             gpio_output_set_high(&c->enable);
         }
-#endif
     }
 }

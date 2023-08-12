@@ -6,12 +6,6 @@ The hardware supports up to 4 parallel focus channels, but the current firmware 
 
 TODO: The focuser maintains its own absolute scale across power cycles, so positions should be repeatable provided the focus is not moved manually.
 
-### Hardware:
-
- * Arduino Leonardo
- * GRBL 0.9 CNC Shield
- * Pancake stepper motors
-
 ### Protocol Commands:
 
 | Command             | Use                                  |
