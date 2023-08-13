@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "ds18b20.h"
 #include "gpio.h"
 #include "usb.h"
 
@@ -51,6 +52,7 @@ gpin_t usb_rx_led = { &PORTB, &PINB, &DDRB, PB0 };
 gpin_t usb_tx_led = { &PORTD, &PIND, &DDRD, PD5 };
 
 gpin_t fans = { &PORTB, &PINB, &DDRB, PB5 };
+gpin_t onewire_bus = { &PORTF, &PINF, &DDRF, PF1 };
 
 // The raw motor resolution is too fine to be useful
 // Work internally at 64x resolution, which allows 7 digits of external resolution.
@@ -61,7 +63,7 @@ volatile bool led_active;
 char output[256];
 
 uint8_t command_length = 0;
-char command_buffer[16];
+char command_buffer[20];
 
 int32_t target_steps[CHANNEL_COUNT] = {};
 int32_t current_steps[CHANNEL_COUNT] = {};
@@ -132,6 +134,53 @@ static void loop(void)
                     gpio_output_set_low(&fans);
 
                 print_string("$\r\n");
+            }
+            else if (command_length == 1 && cb[0] == '@')
+            {
+                // Allocate space to find up to 4 sensors
+                uint8_t addresses[4*8];
+                uint8_t found;
+                ds18b20_search(&onewire_bus, &found, addresses, sizeof(addresses));
+
+                for (uint8_t i = 0; i < found; i++)
+                {
+                    for (uint8_t j = 0; j < 8; j++)
+                        sprintf(output + i * 17 + 2 * j, "%02X", addresses[i * 8 + j]);
+                    output[i * 17 + 16] = ',';
+                }
+
+                sprintf(output + found * 17 - 1, "\r\n");
+                print_string(output);
+            }
+            else if (command_length == 17 && cb[0] == '@')
+            {
+                uint8_t address[8];
+                bool failed = false;
+                for (uint8_t i = 0; i < 8; i++)
+                {
+                    int temp;
+                    if (!sscanf(command_buffer + 2 * i + 1, "%02X", &temp))
+                    {
+                        failed = true;
+                        break;
+                    }
+
+                    address[i] = (uint8_t)temp;
+                }
+
+                if (!failed)
+                {
+                    char temp[10];
+                    if (ds18b20_measure(&onewire_bus, address, temp))
+                    {
+                        sprintf(output, "%s\r\n", temp);
+                        print_string(output);
+                    }
+                    else
+                        print_string("FAILED\r\n");
+                }
+                else
+                    print_string("?\r\n");
             }
             else if (cb[0] > '0' && cb[0] <= '0' + CHANNEL_COUNT)
             {
