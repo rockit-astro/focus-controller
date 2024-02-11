@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include "ds18b20.h"
+#include "ds2438.h"
 #include "gpio.h"
 #include "usb.h"
 
@@ -140,7 +140,7 @@ static void loop(void)
                 // Allocate space to find up to 4 sensors
                 uint8_t addresses[4*8];
                 uint8_t found;
-                ds18b20_search(&onewire_bus, &found, addresses, sizeof(addresses));
+                ds2438_search(&onewire_bus, &found, addresses, sizeof(addresses));
 
                 for (uint8_t i = 0; i < found; i++)
                 {
@@ -171,9 +171,10 @@ static void loop(void)
                 if (!failed)
                 {
                     char temp[10];
-                    if (ds18b20_measure(&onewire_bus, address, temp))
+                    char voltage[10];
+                    if (ds2438_measure(&onewire_bus, address, temp, voltage))
                     {
-                        sprintf(output, "%s\r\n", temp);
+                        sprintf(output, "%s;%s\r\n", temp, voltage);
                         print_string(output);
                     }
                     else
