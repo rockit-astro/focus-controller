@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <util/crc16.h>
 #include <util/delay.h>
 #include "ds2438.h"
@@ -176,17 +177,6 @@ static uint8_t onewire_read(const gpin_t* io)
     return buffer;
 }
 
-static void onewire_match_rom(const gpin_t* io, uint8_t* address)
-{
-    // Write Match Rom command on bus
-    onewire_write(io, 0x55);
-
-    // Send the passed address
-    for (uint8_t i = 0; i < 8; ++i) {
-        onewire_write(io, address[i]);
-    }
-}
-
 /**
  * Search procedure for the next ROM addresses
  *
@@ -350,24 +340,24 @@ void ds2438_search(const gpin_t* io, uint8_t *found, uint8_t *buf, uint16_t len)
     *found = i;
 }
 
-static uint32_t ds2438_read_slave(const gpin_t* io, uint8_t* address, uint8_t buffer[9])
+static uint32_t ds2438_read_slave(const gpin_t* io, uint8_t page, uint8_t buffer[9])
 {
     // Confirm the device is still alive. Abort if no reply
     if (!onewire_reset(io)) {
         return kDS2438_DeviceNotFound;
     }
 
-    onewire_match_rom(io, address);
+    onewire_write(io, 0xCC);
     onewire_write(io, kRecallPage);
-    onewire_write(io, 0x0);
+    onewire_write(io, page);
 
     if (!onewire_reset(io)) {
         return kDS2438_DeviceNotFound;
     }
 
-    onewire_match_rom(io, address);
+    onewire_write(io, 0xCC);
     onewire_write(io, kReadScatchPad);
-    onewire_write(io, 0x0);
+    onewire_write(io, page);
 
     for (int8_t i = 0; i < 9; ++i) {
         buffer[i] = onewire_read(io);
@@ -381,35 +371,36 @@ static uint32_t ds2438_read_slave(const gpin_t* io, uint8_t* address, uint8_t bu
     return 0;
 }
 
-bool ds2438_measure(const gpin_t* io, uint8_t address[8], char temp[10], char voltage[10])
+bool ds2438_measure(const gpin_t* io, char output[20])
 {
     uint8_t buffer[9];
 
     if (!onewire_reset(io))
-        return kDS2438_DeviceNotFound;
+        return false;
 
-    onewire_match_rom(io, address);
+    onewire_write(io, 0xCC);
 
     // Switch to VAD
     onewire_write(io, 0x4E);
     onewire_write(io, 0x00);
     onewire_write(io, 0x00);
 
+    _delay_ms(20);
     if (!onewire_reset(io))
-        return kDS2438_DeviceNotFound;
+        return false;
 
-    onewire_match_rom(io, address);
+    onewire_write(io, 0xCC);
     onewire_write(io, kConvertTCommand);
     _delay_ms(20);
 
     if (!onewire_reset(io))
-        return kDS2438_DeviceNotFound;
+        return false;
 
-    onewire_match_rom(io, address);
+    onewire_write(io, 0xCC);
     onewire_write(io, kConvertVCommand);
     _delay_ms(20);
 
-    uint32_t reading = ds2438_read_slave(io, address, buffer);
+    uint32_t reading = ds2438_read_slave(io, 0, buffer);
     if (reading == kDS2438_CrcCheckFailed)
         return false;
 
@@ -418,10 +409,11 @@ bool ds2438_measure(const gpin_t* io, uint8_t address[8], char temp[10], char vo
 
     const uint16_t vad = ((buffer[kScratchPad_VMSB] << 8) | buffer[kScratchPad_VLSB]) * 10;
 
+    _delay_ms(20);
     if (!onewire_reset(io))
-        return kDS2438_DeviceNotFound;
+        return false;
 
-    onewire_match_rom(io, address);
+    onewire_write(io, 0xCC);
 
     // Switch to VDD
     onewire_write(io, 0x4E);
@@ -429,17 +421,17 @@ bool ds2438_measure(const gpin_t* io, uint8_t address[8], char temp[10], char vo
     onewire_write(io, 0x08);
 	
     if (!onewire_reset(io))
-        return kDS2438_DeviceNotFound;
+        return false;
 
-    onewire_match_rom(io, address);
+    onewire_write(io, 0xCC);
     onewire_write(io, kConvertVCommand);
     _delay_ms(20);
 
     if (!onewire_reset(io)) {
-        return kDS2438_DeviceNotFound;
+        return false;
     }
 
-    reading = ds2438_read_slave(io, address, buffer);
+    reading = ds2438_read_slave(io, 0, buffer);
     if (reading == kDS2438_CrcCheckFailed)
         return false;
 
@@ -450,36 +442,9 @@ bool ds2438_measure(const gpin_t* io, uint8_t address[8], char temp[10], char vo
     const uint8_t temp_integer = buffer[kScratchPad_TMSB];
     const uint16_t temp_frac = (buffer[kScratchPad_TLSB] >> 3) * 32;
 
-    memset(temp, '\0', 10);
-    memset(voltage, '\0', 10);
-
-    itoa(temp_integer, temp, 10);
-    temp += strlen(temp);
-    (*temp++) = '.';
-
-    if (temp_frac == 0) {
-        memset(temp, '0', 4);
-        return true;
-    }
-
-    if (temp_frac < 1000)
-        (*temp++) = '0';
-
-    itoa(temp_frac, temp, 10);
-    
 	float temperature = temp_integer + temp_frac / 1000.0f;	
     float sensor_rh = (vad * 1.0f / vdd - 0.16f) / (0.0062f * (1.0546f - 0.00216f * temperature));
 
-    itoa(vad, voltage, 10);
-    voltage += strlen(voltage);
-    (*voltage++) = ';';
-    itoa(vdd, voltage, 10);
-    voltage += strlen(voltage);
-    (*voltage++) = ';';
-    itoa((uint16_t)(sensor_rh), voltage, 10);
-    voltage += strlen(voltage);
-    (*voltage++) = '.';
-    itoa((uint16_t)((sensor_rh - (uint16_t)(sensor_rh)) * 100), voltage, 10);
-
+	sprintf(output, "TH;%0.3f;%0.3f\r\n", temperature, sensor_rh);
     return true;
 }
