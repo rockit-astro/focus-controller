@@ -29,23 +29,42 @@ typedef struct
 } focuser;
 
 focuser focusers[] = {
+#if SHUTTERS > 0
     {
         .enable = { &PORTD, &PIND, &DDRD, PD1 },
         .step = { &PORTB, &PINB, &DDRB, PB2 },
         .dir = { &PORTB, &PINB, &DDRB, PB1 }
     },
-#if FOCUSERS == 2
+#endif
+#if FOCUSERS > 1
     {
         .enable = { &PORTB, &PINB, &DDRB, PB6 },
         .step = { &PORTD, &PIND, &DDRD, PD4 },
         .dir = { &PORTD, &PIND, &DDRD, PD0 }
     }
-#elif FOCUSERS > 2
-    #error Only 1 or 2 focusers are supported
 #endif
 };
 
 #define FOCUSER_COUNT (sizeof(focusers)/sizeof(*(focusers)))
+
+typedef struct
+{
+    gpin_t enable;
+    gpin_t a;
+    gpin_t b;
+} shutter;
+
+shutter shutters[] = {
+#if SHUTTERS > 0
+    {
+        .enable = { &PORTF, &PINF, &DDRF, PF5 },
+        .a = { &PORTF, &PINF, &DDRF, PF6 },
+        .b = { &PORTF, &PINF, &DDRF, PF7 }
+    },
+#endif
+};
+
+#define SHUTTER_COUNT (sizeof(shutters)/sizeof(*(shutters)))
 
 gpin_t usb_conn_led = { &PORTC, &PINC, &DDRC, PD7 };
 gpin_t usb_rx_led = { &PORTB, &PINB, &DDRB, PB0 };
@@ -70,6 +89,14 @@ int32_t focuser_current_steps[FOCUSER_COUNT] = {};
 bool focuser_enabled[FOCUSER_COUNT] = {};
 bool focuser_step_high[FOCUSER_COUNT] = {};
 
+// The shutter drive pulse must be active for a minimum of 26ms
+// Track the progress using steps, where 0 = closed and SHUTTER_MAX_STEPS = open
+uint8_t shutter_current_steps[SHUTTER_COUNT] = {};
+uint8_t shutter_target_steps[SHUTTER_COUNT] = {};
+
+// 30ms shutter pulse
+#define SHUTTER_MAX_STEPS 94
+
 bool fans_enabled = false;
 
 static void update_focuser_eeprom(uint8_t i, int32_t target)
@@ -83,6 +110,16 @@ static void update_focuser_eeprom(uint8_t i, int32_t target)
 static int32_t read_focuser_eeprom(uint8_t i)
 {
     return eeprom_read_dword((uint32_t*)(4 * i));
+}
+
+static void update_shutter_eeprom(uint8_t i, uint8_t target)
+{
+    eeprom_update_byte((uint8_t*)(4 * FOCUSER_COUNT + i), target);
+}
+
+static uint8_t read_shutter_eeprom(uint8_t i)
+{
+    return eeprom_read_byte((uint8_t*)(4 * FOCUSER_COUNT + i));
 }
 
 static void print_string(char *message)
@@ -108,7 +145,7 @@ static void loop(void)
         }
 
         // Focuser commands
-        if (command_length > 1 && cb[0] == 'F')
+        if (FOCUSER_COUNT && command_length > 1 && cb[0] == 'F')
         {
             if (cb[1] == '?')
             {
@@ -182,6 +219,54 @@ static void loop(void)
                         print_string("$\r\n");
                         goto command_complete;
                     }
+                }
+            }
+        }
+
+        // Shutter commands
+        else if (SHUTTER_COUNT && command_length > 1 && cb[0] == 'S')
+        {
+            if (cb[1] == '?')
+            {
+                for (uint8_t i = 0; i < SHUTTER_COUNT; i++)
+                {
+                    uint8_t shutter_open = shutter_current_steps[i] == SHUTTER_MAX_STEPS;
+                    sprintf(output + i * 5, "S%01d=%d,", i + 1, shutter_open);
+                }
+
+                sprintf(output + FOCUSER_COUNT * 5 - 1, "\r\n");
+
+                print_string(output);
+                goto command_complete;
+            }
+            else if (cb[1] > '0' && cb[1] <= '0' + SHUTTER_COUNT)
+            {
+                // 0-indexed shutter number
+                uint8_t i = cb[1] - '1';
+
+                // Close shutter S[1..9]C
+                if (command_length == 3 && cb[2] == 'C')
+                {
+                    cli();
+
+                    shutter_target_steps[i] = 0;
+                    update_shutter_eeprom(i, 0);
+
+                    sei();
+                    print_string("$\r\n");
+                    goto command_complete;
+                }
+                // Open shutter S[1..9]O
+                else if (command_length == 3 && cb[2] == 'O')
+                {
+                    cli();
+
+                    shutter_target_steps[i] = SHUTTER_MAX_STEPS;
+                    update_shutter_eeprom(i, SHUTTER_MAX_STEPS);
+
+                    sei();
+                    print_string("$\r\n");
+                    goto command_complete;
                 }
             }
         }
@@ -292,6 +377,20 @@ int main(void)
         focuser_target_steps[i] = focuser_current_steps[i] = read_focuser_eeprom(i);
     }
 
+    for (uint8_t i = 0; i < SHUTTER_COUNT; i++)
+    {
+        shutter *s = &shutters[i];
+        gpio_output_set_low(&s->enable);
+        gpio_configure_output(&s->enable);
+
+        gpio_output_set_low(&s->a);
+        gpio_configure_output(&s->a);
+
+        gpio_output_set_low(&s->b);
+        gpio_configure_output(&s->b);
+        shutter_target_steps[i] = shutter_current_steps[i] = read_shutter_eeprom(i);
+    }
+
     gpio_output_set_low(&fans);
     gpio_configure_output(&fans);
 
@@ -348,5 +447,26 @@ ISR(TIMER1_COMPA_vect)
             focuser_enabled[i] = false;
             gpio_output_set_high(&f->enable);
         }
+    }
+
+    for (uint8_t i = 0; i < SHUTTER_COUNT; i++)
+    {
+        shutter *s = &shutters[i];
+        if (shutter_current_steps[i] < shutter_target_steps[i])
+        {
+            gpio_output_set_high(&s->a);
+            gpio_output_set_low(&s->b);
+            gpio_output_set_high(&s->enable);
+            shutter_current_steps[i]++;
+        }
+        else if (shutter_current_steps[i] > shutter_target_steps[i])
+        {
+            gpio_output_set_low(&s->a);
+            gpio_output_set_high(&s->b);
+            gpio_output_set_high(&s->enable);
+            shutter_current_steps[i]--;
+        }
+        else
+            gpio_output_set_low(&s->enable);
     }
 }

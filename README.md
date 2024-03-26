@@ -1,6 +1,6 @@
 ## Multi-channel Focus Controller
 
-Firmware for Arduino-based stepper motor focus controller for the twin RASA telescopes on CLASP.
+Firmware for Arduino-based focus / shutter / fan controller for the twin RASA telescopes on CLASP.
 
 The focuser maintains its own absolute scale across power cycles, so positions should be repeatable provided the focus is not moved manually.
 
@@ -12,6 +12,9 @@ The focuser maintains its own absolute scale across power cycles, so positions s
 | `F[12]S\n`             | Stop focuser 1/2 at current position                         |
 | `F[12]Z\n`             | Zero focuser 1/2 at current position                         |
 | `F[12][+-]1234567\n`   | Set focuser 1/2 target position                              |
+| `S?\n`                 | Query shutter status                                         |
+| `S[12]O\n`             | Open shutter 1/2                                             |
+| `S[12]C\n`             | Close shutter 1/2                                            |
 | `C?\n`                 | Query fans status                                            |
 | `C[01]\n`              | Disable or enable fans                                       |
 | `T?XXXXXXXXXXXXXXXX\n` | Query temperature of 1-wire probe with the given address     |
@@ -26,5 +29,6 @@ Note: Focus positions are limited to 7 digits.
 | `?\r\n`                                                 | Unknown command                                 |
 | `$\r\n`                                                 | Command acknowledged (except `[FSCT]?`)         |
 | `T1=+0000000,C1=+0000000(,T2=+0000000,C2=+0000000)\r\n` | Current focuser status (response to `?`)        |
+| `S1=[01](,S2=[01])\r\n`                                 | Current shutter status (response to `!`)        |
 | `[01]\r\n`                                              | Current fans status (response to `#`)           |
 | `XX.XXXX\r\n`                                           | Temperature measurement (response to `@[addr]`) |

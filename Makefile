@@ -3,8 +3,11 @@
 
 # Run "make help" for target help.
 
-# Number of stepper motor channels, must be 1 or 2
+# Number of focuser channels, must be 1 or 2
 FOCUSERS = 1
+
+# Number of shutter channels, must be 0 or 1
+SHUTTERS = 1
 
 MCU                = atmega32u4
 ARCH               = AVR8
@@ -18,7 +21,7 @@ OPTIMIZATION = s
 TARGET       = main
 SRC          = main.c gpio.c ds18b20.c usb.c usb_descriptors.c $(LUFA_SRC_USB) $(LUFA_SRC_USBCLASS)
 LUFA_PATH    = LUFA
-CC_FLAGS     = -DUSE_LUFA_CONFIG_HEADER -DFOCUSERS=$(FOCUSERS)
+CC_FLAGS     = -DUSE_LUFA_CONFIG_HEADER -DFOCUSERS=$(FOCUSERS) -DSHUTTERS=$(SHUTTERS)
 LD_FLAGS     = -Wl,-u,vfprintf -lprintf_flt -lm
 
 # Default target
