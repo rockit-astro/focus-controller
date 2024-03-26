@@ -26,26 +26,26 @@ typedef struct
     gpin_t enable;
     gpin_t step;
     gpin_t dir;
-} channel;
+} focuser;
 
-channel channels[] = {
+focuser focusers[] = {
     {
         .enable = { &PORTD, &PIND, &DDRD, PD1 },
         .step = { &PORTB, &PINB, &DDRB, PB2 },
         .dir = { &PORTB, &PINB, &DDRB, PB1 }
     },
-#if CHANNELS == 2
+#if FOCUSERS == 2
     {
         .enable = { &PORTB, &PINB, &DDRB, PB6 },
         .step = { &PORTD, &PIND, &DDRD, PD4 },
         .dir = { &PORTD, &PIND, &DDRD, PD0 }
     }
-#elif CHANNELS > 2
-    #error Only 1 or 2 channels are supported
+#elif FOCUSERS > 2
+    #error Only 1 or 2 focusers are supported
 #endif
 };
 
-#define CHANNEL_COUNT (sizeof(channels)/sizeof(*(channels)))
+#define FOCUSER_COUNT (sizeof(focusers)/sizeof(*(focusers)))
 
 gpin_t usb_conn_led = { &PORTC, &PINC, &DDRC, PD7 };
 gpin_t usb_rx_led = { &PORTB, &PINB, &DDRB, PB0 };
@@ -65,14 +65,14 @@ char output[256];
 uint8_t command_length = 0;
 char command_buffer[20];
 
-int32_t target_steps[CHANNEL_COUNT] = {};
-int32_t current_steps[CHANNEL_COUNT] = {};
-bool enabled[CHANNEL_COUNT] = {};
-bool step_high[CHANNEL_COUNT] = {};
+int32_t focuser_target_steps[FOCUSER_COUNT] = {};
+int32_t focuser_current_steps[FOCUSER_COUNT] = {};
+bool focuser_enabled[FOCUSER_COUNT] = {};
+bool focuser_step_high[FOCUSER_COUNT] = {};
 
 bool fans_enabled = false;
 
-static void update_eeprom(uint8_t i, int32_t target)
+static void update_focuser_eeprom(uint8_t i, int32_t target)
 {
     // Save the current absolute position so we can recover
     // the absolute position after a power cycle.
@@ -80,7 +80,7 @@ static void update_eeprom(uint8_t i, int32_t target)
     eeprom_update_dword((uint32_t*)(4 * i), target);
 }
 
-static int32_t read_eeprom(uint8_t i)
+static int32_t read_focuser_eeprom(uint8_t i)
 {
     return eeprom_read_dword((uint32_t*)(4 * i));
 }
@@ -104,16 +104,16 @@ static void loop(void)
             char *cb = command_buffer;
             if (command_length == 1 && cb[0] == '?')
             {
-                for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+                for (uint8_t i = 0; i < FOCUSER_COUNT; i++)
                 {
                     sprintf(output + i * 22, "T%01d=%+07ld,C%01d=%+07ld,",
                         i + 1,
-                        target_steps[i] >> DOWNSAMPLE_BITS,
+                        focuser_target_steps[i] >> DOWNSAMPLE_BITS,
                         i + 1,
-                        current_steps[i] >> DOWNSAMPLE_BITS);
+                        focuser_current_steps[i] >> DOWNSAMPLE_BITS);
                 }
                 
-                sprintf(output + CHANNEL_COUNT * 22 - 1, "\r\n");
+                sprintf(output + FOCUSER_COUNT * 22 - 1, "\r\n");
                 
                 print_string(output);
             }
@@ -182,9 +182,9 @@ static void loop(void)
                 else
                     print_string("?\r\n");
             }
-            else if (cb[0] > '0' && cb[0] <= '0' + CHANNEL_COUNT)
+            else if (cb[0] > '0' && cb[0] <= '0' + FOCUSER_COUNT)
             {
-                // 0-indexed channel number
+                // 0-indexed focuser number
                 uint8_t i = cb[0] - '1';
 
                 // Stop at current position: [1..9]S\r\n
@@ -192,8 +192,8 @@ static void loop(void)
                 {
                     cli();
 
-                    target_steps[i] = current_steps[i];
-                    update_eeprom(i, target_steps[i]);
+                    focuser_target_steps[i] = focuser_current_steps[i];
+                    update_focuser_eeprom(i, focuser_target_steps[i]);
 
                     sei();
                     print_string("$\r\n");
@@ -203,8 +203,8 @@ static void loop(void)
                 {
                     cli();
 
-                    target_steps[i] = current_steps[i] = 0;
-                    update_eeprom(i, 0);
+                    focuser_target_steps[i] = focuser_current_steps[i] = 0;
+                    update_focuser_eeprom(i, 0);
 
                     sei();
                     print_string("$\r\n");
@@ -229,8 +229,8 @@ static void loop(void)
                         int32_t target = atol(&cb[1]);
                         cli();
 
-                        target_steps[i] = target << DOWNSAMPLE_BITS;
-                        update_eeprom(i, target_steps[i]);
+                        focuser_target_steps[i] = target << DOWNSAMPLE_BITS;
+                        update_focuser_eeprom(i, focuser_target_steps[i]);
 
                         sei();
                         print_string("$\r\n");
@@ -259,19 +259,19 @@ int main(void)
     TCCR1B = _BV(CS12) | _BV(CS10) | _BV(WGM12);
     TIMSK1 |= _BV(OCIE1A);
 
-    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+    for (uint8_t i = 0; i < FOCUSER_COUNT; i++)
     {
-        channel *c = &channels[i];
-        gpio_output_set_high(&c->enable);
-        gpio_configure_output(&c->enable);
+        focuser *f = &focusers[i];
+        gpio_output_set_high(&f->enable);
+        gpio_configure_output(&f->enable);
 
-        gpio_output_set_low(&c->step);
-        gpio_configure_output(&c->step);
+        gpio_output_set_low(&f->step);
+        gpio_configure_output(&f->step);
 
-        gpio_output_set_low(&c->dir);
-        gpio_configure_output(&c->dir);
+        gpio_output_set_low(&f->dir);
+        gpio_configure_output(&f->dir);
 
-        target_steps[i] = current_steps[i] = read_eeprom(i);
+        focuser_target_steps[i] = focuser_current_steps[i] = read_focuser_eeprom(i);
     }
 
     gpio_output_set_low(&fans);
@@ -286,49 +286,49 @@ int main(void)
 
 ISR(TIMER1_COMPA_vect)
 {
-    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+    for (uint8_t i = 0; i < FOCUSER_COUNT; i++)
     {
-        channel *c = &channels[i];
-        if (!enabled[i] && current_steps[i] != target_steps[i])
+        focuser *f = &focusers[i];
+        if (!focuser_enabled[i] && focuser_current_steps[i] != focuser_target_steps[i])
         {
-            enabled[i] = true;
-            step_high[i] = true;
-            gpio_output_set_high(&c->step);
-            gpio_output_set_low(&c->enable);
+            focuser_enabled[i] = true;
+            focuser_step_high[i] = true;
+            gpio_output_set_high(&f->step);
+            gpio_output_set_low(&f->enable);
 
             // Skip a step when enabling a motor to avoid losing a count while it powers up
             continue;
         }
-        else if (current_steps[i] < target_steps[i])
+        else if (focuser_current_steps[i] < focuser_target_steps[i])
         {
-            gpio_output_set_high(&c->dir);
-            if (!step_high[i])
+            gpio_output_set_high(&f->dir);
+            if (!focuser_step_high[i])
             {
-                gpio_output_set_high(&c->step);
-                current_steps[i]++;
+                gpio_output_set_high(&f->step);
+                focuser_current_steps[i]++;
             }
             else
-                gpio_output_set_low(&c->step);
+                gpio_output_set_low(&f->step);
 
-            step_high[i] ^= true;
+            focuser_step_high[i] ^= true;
         }
-        else if (current_steps[i] > target_steps[i])
+        else if (focuser_current_steps[i] > focuser_target_steps[i])
         {
-            gpio_output_set_low(&c->dir);
-            if (!step_high[i])
+            gpio_output_set_low(&f->dir);
+            if (!focuser_step_high[i])
             {
-                gpio_output_set_high(&c->step);
-                current_steps[i]--;
+                gpio_output_set_high(&f->step);
+                focuser_current_steps[i]--;
             }
             else
-                gpio_output_set_low(&c->step);
+                gpio_output_set_low(&f->step);
 
-            step_high[i] ^= true;
+            focuser_step_high[i] ^= true;
         }
-        else if (enabled[i])
+        else if (focuser_enabled[i])
         {
-            enabled[i] = false;
-            gpio_output_set_high(&c->enable);
+            focuser_enabled[i] = false;
+            gpio_output_set_high(&f->enable);
         }
     }
 }
