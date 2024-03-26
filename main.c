@@ -63,7 +63,7 @@ volatile bool led_active;
 char output[256];
 
 uint8_t command_length = 0;
-char command_buffer[20];
+char cb[20];
 
 int32_t focuser_target_steps[FOCUSER_COUNT] = {};
 int32_t focuser_current_steps[FOCUSER_COUNT] = {};
@@ -98,11 +98,19 @@ static void loop(void)
         if (value < 0)
             break;
 
-        if (command_length > 0 && (value == '\r' || value == '\n'))
+        if (value != '\r' && value != '\n')
         {
-            // Report stepper motor status
-            char *cb = command_buffer;
-            if (command_length == 1 && cb[0] == '?')
+            cb[command_length] = (uint8_t)value;
+            if (command_length < sizeof(cb))
+                command_length++;
+
+            continue;
+        }
+
+        // Focuser commands
+        if (command_length > 1 && cb[0] == 'F')
+        {
+            if (cb[1] == '?')
             {
                 for (uint8_t i = 0; i < FOCUSER_COUNT; i++)
                 {
@@ -112,18 +120,83 @@ static void loop(void)
                         i + 1,
                         focuser_current_steps[i] >> DOWNSAMPLE_BITS);
                 }
-                
+
                 sprintf(output + FOCUSER_COUNT * 22 - 1, "\r\n");
-                
+
                 print_string(output);
+                goto command_complete;
             }
-            else if (command_length == 1 && cb[0] == '#')
+            else if (cb[1] > '0' && cb[1] <= '0' + FOCUSER_COUNT)
+            {
+                // 0-indexed focuser number
+                uint8_t i = cb[1] - '1';
+
+                // Stop at current position: F[1..9]S\r\n
+                if (command_length == 3 && cb[2] == 'S')
+                {
+                    cli();
+
+                    focuser_target_steps[i] = focuser_current_steps[i];
+                    update_focuser_eeprom(i, focuser_target_steps[i]);
+
+                    sei();
+                    print_string("$\r\n");
+                    goto command_complete;
+                }
+                // Zero at current position: F[1..9]Z\r\n
+                else if (command_length == 3 && cb[2] == 'Z')
+                {
+                    cli();
+
+                    focuser_target_steps[i] = focuser_current_steps[i] = 0;
+                    update_focuser_eeprom(i, 0);
+
+                    sei();
+                    print_string("$\r\n");
+                    goto command_complete;
+                }
+                // Move to position: F[1..9][+-]1234567\r\n
+                else if (command_length > 3 && (cb[2] == '+' || cb[2] == '-'))
+                {
+                    bool is_number = command_length <= 9;
+                    for (uint8_t i = 3; i < command_length; i++)
+                    {
+                        if (cb[i] < '0' || cb[i] > '9')
+                        {
+                            is_number = false;
+                            break;
+                        }
+                    }
+
+                    if (is_number)
+                    {
+                        // atoi expects a null terminated string
+                        cb[command_length++] = '\0';
+                        int32_t target = atol(&cb[2]);
+                        cli();
+
+                        focuser_target_steps[i] = target << DOWNSAMPLE_BITS;
+                        update_focuser_eeprom(i, focuser_target_steps[i]);
+
+                        sei();
+                        print_string("$\r\n");
+                        goto command_complete;
+                    }
+                }
+            }
+        }
+
+        // Fan commands
+        else if (command_length == 2 && cb[0] == 'C')
+        {
+            if (cb[1] == '?')
             {
                 // Report fan status
                 sprintf(output, "%d\r\n", fans_enabled);
                 print_string(output);
+                goto command_complete;
             }
-            else if (command_length == 2 && cb[0] == '#' && (cb[1] == '0' || cb[1] == '1'))
+            else if (cb[1] == '0' || cb[1] == '1')
             {
                 // Switch fans on or off
                 fans_enabled = cb[1] == '1';
@@ -134,8 +207,14 @@ static void loop(void)
                     gpio_output_set_low(&fans);
 
                 print_string("$\r\n");
+                goto command_complete;
             }
-            else if (command_length == 1 && cb[0] == '@')
+        }
+
+        // Temperature sensor commands
+        else if (command_length > 1 && cb[0] == 'T' && cb[1] == '?')
+        {
+            if (command_length == 2)
             {
                 // Allocate space to find up to 4 sensors
                 uint8_t addresses[4*8];
@@ -151,15 +230,16 @@ static void loop(void)
 
                 sprintf(output + found * 17 - 1, "\r\n");
                 print_string(output);
+                goto command_complete;
             }
-            else if (command_length == 17 && cb[0] == '@')
+            else if (command_length == 18)
             {
                 uint8_t address[8];
                 bool failed = false;
                 for (uint8_t i = 0; i < 8; i++)
                 {
                     int temp;
-                    if (!sscanf(command_buffer + 2 * i + 1, "%02X", &temp))
+                    if (!sscanf(cb + 2 * i + 2, "%02X", &temp))
                     {
                         failed = true;
                         break;
@@ -178,78 +258,16 @@ static void loop(void)
                     }
                     else
                         print_string("FAILED\r\n");
-                }
-                else
-                    print_string("?\r\n");
-            }
-            else if (cb[0] > '0' && cb[0] <= '0' + FOCUSER_COUNT)
-            {
-                // 0-indexed focuser number
-                uint8_t i = cb[0] - '1';
 
-                // Stop at current position: [1..9]S\r\n
-                if (command_length == 2 && cb[1] == 'S')
-                {
-                    cli();
-
-                    focuser_target_steps[i] = focuser_current_steps[i];
-                    update_focuser_eeprom(i, focuser_target_steps[i]);
-
-                    sei();
-                    print_string("$\r\n");
-                }
-                // Zero at current position: [1..9]Z\r\n
-                else if (command_length == 2 && cb[1] == 'Z')
-                {
-                    cli();
-
-                    focuser_target_steps[i] = focuser_current_steps[i] = 0;
-                    update_focuser_eeprom(i, 0);
-
-                    sei();
-                    print_string("$\r\n");
-                }
-                // Move to position: [1..9][+-]1234567\r\n
-                else if (command_length > 2 && (cb[1] == '+' || cb[1] == '-'))
-                {
-                    bool is_number = command_length <= 9;
-                    for (uint8_t i = 2; i < command_length; i++)
-                    {
-                        if (cb[i] < '0' || cb[i] > '9')
-                        {
-                            is_number = false;
-                            break;
-                        }
-                    }
-                    
-                    if (is_number)
-                    {
-                        // atoi expects a null terminated string
-                        command_buffer[command_length++] = '\0';
-                        int32_t target = atol(&cb[1]);
-                        cli();
-
-                        focuser_target_steps[i] = target << DOWNSAMPLE_BITS;
-                        update_focuser_eeprom(i, focuser_target_steps[i]);
-
-                        sei();
-                        print_string("$\r\n");
-                    }
-                    else
-                        print_string("?\r\n");
+                    goto command_complete;
                 }
             }
-            else
-                print_string("?\r\n");
+        }
 
-            command_length = 0;
-        }
-        else
-        {
-            command_buffer[command_length] = (uint8_t)value;
-            if (command_length < sizeof(command_buffer))
-                command_length++;
-        }
+        print_string("?\r\n");
+
+    command_complete:
+        command_length = 0;
     }
 }
 
